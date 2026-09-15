@@ -1,0 +1,37 @@
+---
+title: "explore_hucs"
+author: "KEC"
+date: "2026-08-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+
+# Install the package if you haven't already
+# install.packages("dataRetrieval")
+
+library(dataRetrieval)
+
+# Define your USGS NWIS Site ID (Prepend with "USGS-")
+site_id <- "USGS-12082500"
+
+# Fetch monitoring location metadata using the modernized API function
+site_metadata <- read_waterdata_monitoring_location(monitoring_location_id = site_id)
+
+# Extract the HUC (Hydrologic Unit Code)
+# Note: The field name in the returned dataframe is typically 'huc_cd'
+huc_code <- site_metadata$hydrologic_unit_code
+
+huc_lev <- nchar(site_metadata$hydrologic_unit_code)
+
+# Print the result
+cat("The HUC for site", site_id, "is:", huc_code, " and the level is: ", huc_lev, "\n")
+
+
+
+```
