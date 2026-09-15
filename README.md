@@ -18,7 +18,7 @@ Runs the VIC hydrologic model (image driver) for an area of interest, using Livn
 
 ## Quick start
 
-1.  Read `setup/SETUP.md` and do the one-time installs (R packages, Homebrew compilers/NetCDF, build VIC, install Tonic, install MetSim) -- or run `setup/setup_macos.sh` to automate all of it (and RVIC's install, section 7) in one script, safe to re-run if it fails partway through.
+1.  First, install [Homebrew](https://brew.sh) and [conda](https://docs.conda.io/en/latest/miniconda.html) (Miniconda or Miniforge) if you don't already have them -- neither this repo nor `setup/setup_macos.sh` installs either one for you, and everything below assumes both are already on your machine. Then read `setup/SETUP.md` (its own "Prerequisites" section has the details) and do the one-time installs (R packages, Homebrew compilers/NetCDF, build VIC, install Tonic, install MetSim) -- or run `setup/setup_macos.sh` to automate all of it (and RVIC's install, section 7) in one script, safe to re-run if it fails partway through.
 
 2.  Open `config.yml` and edit the `paths:` block for your machine -- `vic_source_dir`, `vic_image_exe`, and anything else that isn't a relative path inside this repo.
 

@@ -9,9 +9,19 @@ editor_options:
 
 One-time setup, done on your own machine (not something the R scripts do for you -- compiling VIC and installing Tonic/RVIC both need tools this repo can't install on its own).
 
+## Prerequisites -- install these yourself first
+
+Neither this file nor `setup/setup_macos.sh` installs these -- both assume they're already on your machine before you start:
+
+- **Homebrew** (macOS's package manager) -- <https://brew.sh> -- installs the compilers, NetCDF, MPI, and 7z that sections 2, 3, and 6 below need. If `brew --version` in a terminal doesn't print a version, you don't have it yet.
+- **conda** (Miniconda or Miniforge -- either works) -- <https://docs.conda.io/en/latest/miniconda.html> -- creates the isolated Python environments sections 4 and 7 (Tonic, RVIC) need. Both tools have old, sometimes-conflicting dependency pins that don't coexist with each other or with a normal system Python, which is the whole reason this repo uses conda envs instead of just `pip install`ing everything. If `conda --version` doesn't print a version, you don't have it yet.
+- **R and RStudio** -- <https://posit.co/download/rstudio-desktop/> -- runs everything in `R/`, `run_full_pipeline.Rmd`, and section 1 below.
+
+`setup/setup_macos.sh` checks for Homebrew and conda specifically and stops with a clear message if either is missing, rather than failing partway through some other step because one of them silently wasn't there.
+
 ## Shortcut: run it as one script
 
-Everything below (sections 1-7) is also written up as `setup/setup_macos.sh`, which runs the exact same commands documented in this file, safe to re-run if it fails partway through (it checks what's already done before redoing it). It still needs Homebrew and conda (Miniconda/Miniforge) already installed -- see those sections below -- and it prints the exact `config.yml` paths to paste in when it finishes:
+Everything below (sections 1-7) is also written up as `setup/setup_macos.sh`, which runs the exact same commands documented in this file, safe to re-run if it fails partway through (it checks what's already done before redoing it). It still needs the Prerequisites above already installed, and it prints the exact `config.yml` paths to paste in when it finishes:
 
 ``` sh
 cd /path/to/run_vic_aoi
