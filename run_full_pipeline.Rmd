@@ -1,0 +1,324 @@
+---
+title: "VIC + RVIC Pipeline: Full Run Report"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+params:
+  run_calibration: FALSE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                       fig.align = "center")
+```
+
+<!--
+This report runs R/01_get_aoi_boundary.R through R/14_postprocess_routing.R
+(plus 09b_plot_gridded_maps.R, an extra diagnostic step alongside 09) in
+sequence, exactly as each script is normally run standalone, and shows
+the outputs a collaborator would actually want to look at: the delineated
+watershed, VIC's daily water balance, the per-elevation-band snow
+diagnostic, period-of-record gridded maps, and routed streamflow at the
+pour point.
+
+Every step below FULLY RERUNS, even when a step's own output already
+exists. Rerunning downloads (02, 04, 10) is cheap -- those scripts
+already skip files they've already fetched. MetSim (06), VIC (08), and
+the routing-inputs build (11) do NOT skip already-built output, so those
+three are what make a full re-knit slow; that's a deliberate choice
+(this report always reflects a genuinely fresh run of the whole
+pipeline), not an oversight.
+
+This file must live at the repo root, alongside config.yml and R/ --
+every sourced script uses paths relative to the project root (e.g.
+source("R/00_config.R")), so knitting this from anywhere else won't
+find them. Knitting from RStudio (the Knit button) already uses the
+.Rmd's own location as the working directory, which is what you want.
+
+15_calibrate_routing.R (the velocity/diffusion grid search) is NOT part
+of the default sequential run below -- it reruns RVIC's convolution step
+once per parameter combination, making it far slower than the rest of
+the pipeline combined. It's included as an opt-in section at the end,
+controlled by this file's `run_calibration` parameter.
+-->
+
+Sourcing `R/00_config.R` once up front so this report's own narrative
+text (below) can reference `cfg`. Every step chunk further down sources
+it again itself too -- that's how each script is normally run standalone
+-- which is redundant but harmless (`00_config.R` only parses
+`config.yml` and creates output directories that don't exist yet).
+
+```{r load-config}
+source("R/00_config.R")
+```
+
+## `r cfg$aoi$name` -- `r format(cfg$run$start_date, "%Y-%m-%d")` to `r format(cfg$run$end_date, "%Y-%m-%d")`
+
+This report reruns the full pipeline for the AOI and run window
+currently set in `config.yml` (edit that file, not this one, to point at
+a different AOI or period).
+
+---
+
+## Step 1 -- AOI boundary + bounding box
+
+Fetches the AOI boundary polygon (watershed draining to the configured
+USGS gauge, or a WBD HUC polygon -- see `config.yml`'s `aoi.mode`),
+saves it as GeoJSON, and derives the padded lat/lon bounding box later
+steps use to subset the Livneh grid.
+
+```{r step-01}
+source("R/01_get_aoi_boundary.R")
+```
+
+### Watershed
+
+```{r plot-watershed, echo=FALSE}
+knitr::include_graphics(fs::path(cfg$paths$aoi_dir, "aoi_map.png"))
+```
+
+## Step 2 -- download Livneh VIC4 parameter files
+
+Downloads the Livneh CONUS VIC4-classic-driver soil/veg/snow-band
+parameter files (one-time; already-downloaded files are skipped).
+
+```{r step-02}
+source("R/02_download_vic_params.R")
+```
+
+## Step 2b -- subset parameters to the AOI
+
+Subsets the full-CONUS ASCII parameter files down to just this AOI's
+bounding box before conversion, so the conversion step (3) doesn't have
+to run its snow-band matching over the entire CONUS grid.
+
+```{r step-02b}
+source("R/02b_subset_params_to_aoi.R")
+```
+
+## Step 3 -- convert parameters to NetCDF
+
+Converts the AOI-subset ASCII parameter files into a single VIC5
+image-driver parameter NetCDF, via Tonic.
+
+```{r step-03}
+source("R/03_convert_params_to_netcdf.R")
+```
+
+## Step 4 -- download Livneh forcing
+
+Downloads the raw Livneh Prec/Tmax/Tmin/Wind forcing months covering the
+run window plus MetSim's required spin-up window (already-downloaded
+months are skipped).
+
+```{r step-04}
+source("R/04_download_forcing.R")
+```
+
+## Step 4b -- build forcing NetCDF
+
+Subsets each monthly forcing file to the AOI bbox and concatenates
+months into one NetCDF per calendar year, MetSim's expected input
+layout.
+
+```{r step-04b}
+source("R/04b_build_forcing_netcdf.R")
+```
+
+## Step 5 -- build the domain file
+
+Aligns the converted parameter NetCDF onto the forcing grid's exact
+coordinates and writes `domain.aoi.nc`, which DOMAIN/PARAMS/FORCING all
+have to share for VIC's image driver.
+
+```{r step-05}
+source("R/05_build_domain.R")
+```
+
+## Step 6 -- run MetSim
+
+Derives the full AIR_TEMP/PREC/PRESSURE/SWDOWN/LWDOWN/VP/WIND forcing set
+VIC5's image driver requires from Livneh's raw Tmax/Tmin/Prec/Wind. This
+does NOT skip already-built output -- it always reruns MetSim over the
+full window.
+
+```{r step-06}
+source("R/06_run_metsim.R")
+```
+
+## Step 7 -- write global_param.txt
+
+Writes VIC's global parameter file, pointing at MetSim's output and this
+run's explicit `OUTFILE`/`OUTVAR` configuration (fluxes/snow/snowband
+streams).
+
+```{r step-07}
+source("R/07_write_globalparam.R")
+```
+
+## Step 8 -- run VIC
+
+Runs the compiled VIC5 image-driver binary. This is normally the slowest
+step in the pipeline, and does NOT skip already-built output -- it
+always reruns the full simulation over the configured run window.
+
+```{r step-08}
+source("R/08_run_vic.R")
+```
+
+## Step 9 -- postprocess VIC output
+
+Computes AOI-mean daily water balance (runoff, baseflow, AET, PET, SWE)
+and a per-elevation-band SWE breakdown, saving CSVs and plots for both.
+
+```{r step-09}
+source("R/09_postprocess_outputs.R")
+```
+
+### Daily water balance
+
+```{r plot-daily-summary, echo=FALSE}
+knitr::include_graphics(fs::path(cfg$paths$output_dir, "aoi_daily_summary.png"))
+```
+
+### SWE by elevation band
+
+```{r plot-snowband, echo=FALSE}
+snowband_png <- fs::path(cfg$paths$output_dir, "aoi_snowband_daily.png")
+if (fs::file_exists(snowband_png)) {
+  knitr::include_graphics(snowband_png)
+} else {
+  cat("aoi_snowband_daily.png not found -- band_vars_to_read in ",
+      "09_postprocess_outputs.R may be empty, or snowband.<startdate>.nc ",
+      "is missing.")
+}
+```
+
+## Step 9b -- gridded period-of-record maps
+
+For each variable in `09b_plot_gridded_maps.R`'s `vars_to_map` (runoff,
+baseflow, AET, PET, and SWE by default), computes the mean over every day
+in the run at each active grid cell and plots it as a map with the
+watershed boundary overlaid -- the spatial complement to Step 9's
+AOI-wide daily time series above (that one collapses space and keeps
+time; this one collapses time and keeps space).
+
+```{r step-09b}
+source("R/09b_plot_gridded_maps.R")
+```
+
+### Period-of-record mean maps
+
+```{r plot-gridded-maps, echo=FALSE}
+gridded_pngs <- sort(fs::dir_ls(cfg$paths$output_dir, glob = "*aoi_gridded_*.png"))
+if (length(gridded_pngs) > 0) {
+  knitr::include_graphics(gridded_pngs)
+} else {
+  cat("No aoi_gridded_*.png files found -- check vars_to_map in ",
+      "09b_plot_gridded_maps.R.")
+}
+```
+
+## Step 10 -- download NHDPlus HR
+
+Downloads the NHDPlus HR flow-direction/accumulation raster package for
+the HUC4 containing this AOI (already-extracted data is skipped).
+
+```{r step-10}
+source("R/10_download_nhdplus.R")
+```
+
+## Step 11 -- build routing inputs
+
+Derives flow direction from NHDPlus HR's hydro-conditioned DEM and
+upscales it onto `domain.aoi.nc`'s exact grid, producing
+`routing_inputs.nc`. Does NOT skip already-built output.
+
+```{r step-11}
+source("R/11_build_routing_inputs.R")
+```
+
+## Step 12 -- RVIC parameter generation
+
+Combines the routing inputs, pour point, and within-cell unit hydrograph
+into unit hydrographs routed to the outlet.
+
+```{r step-12}
+source("R/12_run_rvic_parameters.R")
+```
+
+## Step 13 -- RVIC convolution
+
+Routes VIC's `OUT_RUNOFF`/`OUT_BASEFLOW` through the unit hydrographs
+from Step 12 to produce daily routed streamflow at the pour point.
+
+```{r step-13}
+source("R/13_run_rvic_convolution.R")
+```
+
+## Step 14 -- postprocess routing
+
+Reads RVIC's routed streamflow, writes a CSV, and plots it against
+observed USGS discharge at the same gauge (if `config.yml`'s
+`routing.observed_gauge_site_no` is set) as a timing/shape sanity check
+-- NOT a 1:1 validation, since this VIC run is naturalized (no
+irrigation diversions, trans-basin imports, or reservoir operations
+modeled).
+
+```{r step-14}
+source("R/14_postprocess_routing.R")
+```
+
+### Routed streamflow
+
+```{r plot-routed-flow, echo=FALSE}
+knitr::include_graphics(fs::path(cfg$paths$output_dir, "routed_streamflow.png"))
+```
+
+---
+
+## Step 15 (optional) -- routing calibration grid search
+
+Not run by default -- `15_calibrate_routing.R` reruns RVIC's convolution
+step once per velocity/diffusion combination in the grid, which is far
+slower than Steps 1-14 combined. To include it, knit with
+`rmarkdown::render("run_full_pipeline.Rmd", params = list(run_calibration = TRUE))`,
+or set `run_calibration: TRUE` in this file's YAML header.
+
+```{r step-15, eval=params$run_calibration}
+source("R/15_calibrate_routing.R")
+```
+
+```{r calibration-outputs, echo=FALSE, eval=params$run_calibration}
+results_path <- fs::path(cfg$paths$routing_dir, "calibration_grid_search.csv")
+if (fs::file_exists(results_path)) {
+  knitr::kable(readr::read_csv(results_path, show_col_types = FALSE),
+               caption = "Grid search results (sorted best KGE first)")
+}
+heatmap_path <- fs::path(cfg$paths$routing_dir, "calibration_grid_search.png")
+if (fs::file_exists(heatmap_path)) {
+  knitr::include_graphics(heatmap_path)
+}
+```
+
+```{r calibration-skipped-note, echo=FALSE, eval=!params$run_calibration, results="asis"}
+cat("_Calibration grid search skipped (`run_calibration` is `FALSE`)._")
+```
+
+---
+
+## Outputs written this run
+
+* `r fs::path(cfg$paths$aoi_dir, "huc_boundary.geojson")`, `aoi_map.png`
+* `r fs::path(cfg$paths$output_dir, "aoi_daily_summary.csv")`, `.png`
+* `r fs::path(cfg$paths$output_dir, "aoi_snowband_daily.csv")`, `.png`
+* `r fs::path(cfg$paths$output_dir, "aoi_gridded_period_mean.csv")`, plus one `aoi_gridded_<variable>.png` per mapped variable
+* `r fs::path(cfg$paths$output_dir, "routed_streamflow.csv")`, `.png`
+(plus `observed_streamflow.csv` if an observed-gauge overlay was available)
+
+Simulated streamflow above is **naturalized** -- no irrigation
+diversions, trans-basin imports, or reservoir operations are modeled, so
+even a near-exact drainage-area match to the observed gauge won't match
+1:1. Use the overlay to check timing/shape, not absolute volume.
