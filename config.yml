@@ -1,0 +1,231 @@
+# ------------------------------------------------------------------------
+# run_vic_aoi configuration
+#
+# Everything a collaborator is likely to need to change lives in this one
+# file: which HUC to run, and where things live on THEIR machine. Nothing
+# in the R/ scripts should have a hardcoded path -- they all read this file
+# via R/00_config.R.
+#
+# Edit the `paths:` block for your own machine before running the scripts.
+# ------------------------------------------------------------------------
+
+aoi:
+  # mode: "huc" (default, a WBD HUC8/10/12 polygon -- needs huc_id/huc_level
+  # below) or "gauge" (the actual watershed draining to gauge_site_no,
+  # delineated by USGS's NLDI -- needs gauge_site_no below instead). See
+  # R/01_get_aoi_boundary.R's header comment for why gauge mode exists:
+  # a HUC polygon's own area is just its local incremental contribution,
+  # not the cumulative drainage area upstream of any point inside it, so
+  # HUC-mode AOIs often don't match any real gauge's drainage area. Pivoted
+  # this Nisqually test to gauge mode after confirming that mismatch
+  # firsthand (HUC12 171100150110: 28.8 sq mi vs USGS 12082500: 133 sq mi).
+  mode: "gauge"
+  gauge_site_no: "12082500"   # USGS gauge; watershed delineated via NLDI
+  # huc_id/huc_level: only used in "huc" mode, EXCEPT huc_id also doubles
+  # as a cache key elsewhere (04b's aoi_monthly subset dir, 11/12's
+  # routing_inputs_*.nc) regardless of mode -- so in gauge mode, set it to
+  # something unique to this gauge rather than leaving it as the old HUC12
+  # code, so cached files don't collide with a huc-mode run of this same
+  # basin.
+  huc_id: "gauge_12082500"
+  huc_level: 12               # unused in gauge mode; kept in case you switch back
+  name: "Nisqually"
+  buffer_deg: 0.25           # degrees of padding around the HUC bbox, so edge
+                              # grid cells aren't clipped (Livneh grid is 1/16 deg)
+
+run:
+  start_date: "1980-01-01"   # Can start in 1915
+  end_date: "2010-12-31"    # Can end as late as 2011
+  calendar: "standard"
+
+# MetSim preprocesses Livneh's daily Tmax/Tmin/Prec/Wind into the full set
+# of variables VIC5's image driver requires (see README's "What's been
+# confirmed" section for why -- VIC5 dropped the old MTCLIM disaggregation
+# that used to accept Tmax/Tmin directly). This also means 04_download_forcing.R
+# downloads state_days of EXTRA months before start_date, for MetSim's
+# required spin-up window.
+metsim:
+  # NOT a free knob -- 90 is hardcoded inside MetSim itself
+  # (metsim.py: `state_start = start - pd.Timedelta("90 days")`, then
+  # `_aggregate_state()` asserts the state file has exactly 90 days).
+  # This value exists so 04_download_forcing.R knows how far back to
+  # download, kept here (not hardcoded there) so it's visible in one
+  # place -- but changing it without changing MetSim's own source won't
+  # do anything except make 04's download window wrong.
+  state_days: 90
+  time_step_min: 180   # 3-hourly. MUST divide 1440 evenly. Sub-daily is
+                        # required to get SWDOWN/LWDOWN/VP/PRESSURE out of
+                        # MetSim at all -- its daily-output mode only
+                        # produces t_min/t_max/prec/vapor_pressure/shortwave,
+                        # missing longwave, air_pressure, and a single temp
+                        # value that VIC's AIR_TEMP needs.
+  prec_type: "uniform" # "triangle"/"mix" give better sub-daily precip
+                        # timing but need dur/t_pk climatology in the
+                        # domain file, which we don't have for this AOI.
+
+# RVIC (https://github.com/UW-Hydro/RVIC) routes VIC's gridded
+# OUT_RUNOFF/OUT_BASEFLOW to a streamflow hydrograph at a specific outlet
+# (a "pour point"). It needs a flow-direction/flow-distance/basin-ID grid
+# ON THE SAME GRID as domain.aoi.nc -- we build that ourselves from
+# NHDPlus HR (see R/10_download_nhdplus.R, R/11_build_routing_inputs.R)
+# rather than deriving it purely from a DEM, since NHDPlus's flow
+# direction is corrected against actual mapped stream channels.
+routing:
+  # The pour point (outlet gauge) this AOI routes to. Pick a USGS gauge
+  # whose drainage area is a near-exact match for the AOI's own area
+  # (via data/aoi/huc_boundary.geojson's areasqkm) when you want it to
+  # represent the AOI's own outlet rather than an interior sub-basin --
+  # dataRetrieval::readNWISsite(site_no)$drain_area_va gives a gauge's
+  # drainage area in sq mi for that comparison. NOTE: VIC's simulation is
+  # naturalized (no irrigation diversions/trans-basin imports/reservoir
+  # ops modeled), so routed flow will NOT match observed discharge 1:1
+  # regardless of which gauge you pick -- useful as a sanity check on
+  # timing/shape, not a strict calibration target.
+  # In gauge mode, R/01_get_aoi_boundary.R AUTO-WRITES this file itself
+  # from NLDI's own snapped pour-point location -- nothing to maintain by
+  # hand. In huc mode, maintain it yourself (pick a gauge whose drainage
+  # area matches the HUC's own area -- see the aoi.mode comment above).
+  pour_points_csv: "routing/pour_points.csv"
+  uh_box_csv: "routing/uh_box.csv"
+  # USGS site number matching pour_points_csv's gauge, used ONLY by
+  # 14_postprocess_routing.R to fetch an observed-discharge overlay via
+  # dataRetrieval -- leave as "EDIT_ME" (or blank) to skip that overlay.
+  # Kept as its own field (not parsed out of pour_points_csv's name
+  # column) so it's one obvious place to update per AOI. In gauge mode
+  # this should just match aoi.gauge_site_no above.
+  observed_gauge_site_no: "12082500"
+  uh_box_header_lines: 1
+  # NHDPlus HUC4 (used to build the NHDPlus HR download URL in
+  # R/10_download_nhdplus.R) is NOT set here -- R/01_get_aoi_boundary.R
+  # derives it via a spatial query against the AOI boundary's own
+  # centroid (works for both huc and gauge mode; a gauge-mode huc_id
+  # isn't a real WBD code, so the old "first 4 digits" shortcut doesn't
+  # apply here anymore), writing it to data/aoi/nhdplus_huc4.txt, which
+  # R/00_config.R then reads. Nothing to edit here -- just run 01 first.
+  # AOI bbox padding (degrees) for the fine-resolution NHDPlus clip in
+  # R/11_build_routing_inputs.R -- wider than cfg$aoi$buffer_deg because
+  # flow direction needs to "see" a bit past the coarse grid's edge
+  # cells to route correctly at the boundary.
+  nhdplus_clip_buffer_deg: 0.1
+  # Velocity (m/s) and diffusion (m2/s) for RVIC's unit hydrograph
+  # generation. Scalar defaults, NOT calibrated for the Poudre -- these
+  # are RVIC's own PNW sample values (samples/configs/rvic.parameters.pnw.cfg),
+  # reused here as a reasonable generic starting point. Revisit if routed
+  # timing looks obviously wrong once you have something to compare against.
+  velocity: 0.5   # PNW default was 1
+  diffusion: 500 # PNW default was 2000
+  output_interval_sec: 86400   # daily, matching VIC's AGGFREQ NDAYS 1 output
+  basin_flowdays: 50
+  cell_flowdays: 2
+  subset_days: 10
+
+# All paths are resolved relative to `paths.project_root` unless they are
+# absolute. EDIT THESE for your own machine / file layout.
+paths:
+  project_root: "."                        # this repo's root
+  aoi_dir: "data/aoi"                       # HUC boundary + bbox
+  raw_params_dir: "data/raw/vic_params"     # downloaded Livneh ASCII VIC4 params
+  raw_forcing_dir: "data/raw/forcing"       # downloaded Livneh forcing files
+  params_nc_dir: "data/vic_params_nc"       # converted image-driver domain/params
+  domain_dir: "data/domain"                 # domain.nc + global param file
+  output_dir: "output"                      # VIC model output
+  log_dir: "logs"                           # VIC run logs
+  metsim_forcing_dir: "data/forcing_metsim" # MetSim-derived, VIC-ready forcing
+                                             # (temp/prec/shortwave/longwave/
+                                             # vapor_pressure/air_pressure/wind),
+                                             # one file per calendar year --
+                                             # written by 06_run_metsim.R.
+                                             # NOT the same as raw_forcing_dir,
+                                             # which only holds the raw Livneh
+                                             # Prec/Tmax/Tmin/Wind MetSim reads
+                                             # as ITS input.
+  nhdplus_dir: "data/raw/nhdplus"           # downloaded/extracted NHDPlus HR
+                                             # flow-direction/accumulation rasters
+                                             # (R/10_download_nhdplus.R)
+  routing_dir: "data/routing"               # routing_inputs.nc (R/11) + RVIC's
+                                             # own case/params/output dirs
+
+  # Software that lives OUTSIDE this repo -- almost certainly different on
+  # every machine. EDIT THESE after you complete setup/SETUP.md.
+  vic_source_dir: "~/src/VIC"                                    # `git clone` target
+  vic_image_exe: "~/src/VIC/vic/drivers/image/vic_image.exe"     # built binary
+  tonic_vic_utils_bin: "vic_utils"           # on PATH once tonic is installed,
+                                              # else give a full path
+  # RStudio does NOT inherit your shell's conda env activation, so
+  # Sys.which("python3") from inside R almost always finds your SYSTEM
+  # python, not the "tonic" conda env's python -- that's why you got
+  # ModuleNotFoundError even after installing tonic. Point this at the
+  # tonic env's python directly. Find it with, in a terminal:
+  #   conda activate tonic && which python
+  # then paste that path here, e.g. "~/miniforge3/envs/tonic/bin/python"
+  tonic_python: "/opt/anaconda3/envs/tonic/bin/python"  # confirm this path
+  # Tonic's setup.py fails to build via pip for a lot of people (it's an
+  # old package -- commonly a numpy.distutils issue, since that was
+  # removed from modern numpy). Cheaper fix than fighting the build: skip
+  # `pip install` for tonic entirely, git-clone it, and point PYTHONPATH
+  # at the clone. tonic_python above still needs numpy/pandas/netcdf4/
+  # scipy installed (those install fine via conda), just not tonic itself.
+  tonic_source_dir: "~/src/tonic"    # `git clone https://github.com/UW-Hydro/tonic.git ~/src/tonic`
+
+  # MetSim (setup/SETUP.md) -- derives the full set of forcing variables
+  # VIC5's image driver requires (AIR_TEMP/SWDOWN/LWDOWN/VP/PRESSURE) from
+  # the Tmax/Tmin/Prec/Wind Livneh actually provides. Same RStudio-doesn't-
+  # inherit-your-shell gotcha as tonic_python -- point this at a real
+  # interpreter path, not just "python3".
+  metsim_python: "~/metsim-venv/bin/python"    # confirm after setup/SETUP.md
+
+  # RVIC (routing/README.md, setup/SETUP.md) -- routes VIC's gridded
+  # runoff/baseflow to a streamflow hydrograph at a pour point. Same
+  # RStudio-doesn't-inherit-your-shell gotcha as metsim_python/tonic_python.
+  # Separate venv from metsim-venv (different, much older dependency pins --
+  # see setup/SETUP.md) with a sibling `pyflwdir_python` since flow-direction
+  # upscaling needs pyflwdir, which isn't an RVIC dependency itself.
+  rvic_python: "/opt/anaconda3/envs/rvic/bin/python"      # confirmed via `which python`
+  pyflwdir_python: "/opt/anaconda3/envs/rvic/bin/python"   # same env works for both;
+                                                  # kept as a separate config
+                                                  # key in case you ever want
+                                                  # to split them
+
+# Upstream data sources. The params URL is the one you pointed to; the
+# forcing URL is a best guess at the sibling directory and MUST be
+# confirmed -- see the header comment in R/04_download_forcing.R.
+source_urls:
+  livneh_params_base: "http://livnehpublicstorage.colorado.edu:81/Livneh.2015.NAmer.Dataset/nldas.vic.params/"
+  livneh_root_base: "http://livnehpublicstorage.colorado.edu:81/Livneh.2015.NAmer.Dataset/"
+  # Confirmed via https://ciresgroups.colorado.edu/livneh/data/daily-obserational-hydrometeorology-data-set-conus-extent-canadian-extent-columbia-river-basin
+  # NOTE: different root than livneh_params_base (2013.CONUS vs 2015.NAmer) --
+  # fine for a CONUS AOI like the Poudre, covers 1915-2011 (our test run's
+  # water-year-2010 window is well within range). Exact per-file naming
+  # not yet confirmed -- run 04_download_forcing.R's Stage B listing step.
+  livneh_forcing_base: "http://livnehpublicstorage.colorado.edu:81/Livneh.2013.CONUS.Dataset/Meteorology.nc.v.1.2.1915.2011.bz2/"
+  wbd_rest_api: "https://hydro.nationalmap.gov/arcgis/rest/services/wbd/MapServer"
+  # NHDPlus HR raster component (flow direction/accumulation, 10m) for a
+  # given HUC4. Confirmed to exist for HUC4 1019 (South Platte) via a
+  # direct S3 bucket listing (prd-tnm.s3.amazonaws.com) -- the file is
+  # NOT small (NHDPlus HR raster packages for a HUC4 subregion are
+  # typically several hundred MB to a few GB compressed), so
+  # R/10_download_nhdplus.R's download will take a while on a home
+  # connection. "{huc4}" is substituted with routing$nhdplus_huc4.
+  nhdplus_hr_raster_base: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/NHDPlusHR/Beta/GDB/"
+
+citation: "See CITATION.md -- required when publishing/sharing results from this pipeline."
+
+# Structural parameters of the Livneh/VIC4 parameter files themselves.
+# These control how python/convert_params_to_netcdf.py (via Tonic) parses
+# the ASCII files. Defaults below are typical for the Livneh CONUS set but
+# are NOT independently confirmed for this exact directory -- verify
+# nlayers against the soil file's column count and veg_classes against the
+# number of data rows in the veg library file once you've downloaded them
+# (02_download_vic_params.R), then edit here if they don't match.
+vic_params:
+  # nlayers/snow_bands/root_zones CONFIRMED against
+  # global.param.4.1.2.c.flux.template.nldas (the original VIC4 global
+  # param file this parameter set shipped with -- see
+  # data/raw/vic_params/ once 02_download_vic_params.R has run).
+  # veg_classes is tonic's own default, not independently confirmed by
+  # that template -- cross-check against the row count in LDAS_veg_lib
+  # if params.vic5.nc comes out looking wrong.
+  nlayers: 3
+  snow_bands: 5
+  veg_classes: 11      # EDIT ME if this doesn't match LDAS_veg_lib's row count
+  root_zones: 3
