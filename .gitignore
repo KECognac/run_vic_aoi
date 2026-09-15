@@ -47,3 +47,12 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+.positai
+
+# --- run_vic_aoi additions ---
+# Large downloaded/generated data -- keep the repo to code + config.
+data/
+output/
+logs/
+*.nc
+*.log
